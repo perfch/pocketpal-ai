@@ -96,6 +96,27 @@ jobs:
       - name: Install Pods
         run: cd ios && bundle exec pod install
 
+      - name: Point Xcode at Node (+ memory limits for Metro)
+        run: |
+          cat > ios/.xcode.env.local <<EOF
+          export NODE_BINARY=$(command -v node)
+          export NODE_OPTIONS=--max-old-space-size=3584
+          export EXTRA_PACKAGER_ARGS="--max-workers 2"
+          EOF
+          sed -i '' 's/^ *//' ios/.xcode.env.local
+          cat ios/.xcode.env.local
+
+      - name: Test JS bundle (diagnostic)
+        env:
+          NODE_OPTIONS: --max-old-space-size=3584
+        run: |
+          set -o pipefail
+          npx react-native bundle --platform ios --dev false \
+            --entry-file index.js \
+            --bundle-output /tmp/main.jsbundle \
+            --assets-dest /tmp/rn-assets \
+            --max-workers 2 2>&1 | tail -n 100
+
       - name: Detect workspace and scheme
         run: |
           WS=$(ls -d ios/*.xcworkspace | head -1)
