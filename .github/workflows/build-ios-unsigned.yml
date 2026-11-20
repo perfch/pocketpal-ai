@@ -54,6 +54,45 @@ jobs:
           [ -f .env ] || cp .env.example .env
           yarn install --frozen-lockfile
 
+      - name: Generate Env.xcconfig and Firebase stub
+        run: |
+          # 1. Env.xcconfig из .env (в xcconfig "//" — комментарий, экранируем)
+          mkdir -p ios/Config
+          if [ ! -f ios/Config/Env.xcconfig ]; then
+            grep -E '^[A-Za-z_][A-Za-z0-9_]*=' .env \
+              | sed 's#//#/$()/#g' > ios/Config/Env.xcconfig || true
+            touch ios/Config/Env.xcconfig
+          fi
+          echo "--- Env.xcconfig (только ключи) ---"
+          cut -d= -f1 ios/Config/Env.xcconfig
+
+          # 2. Где проект ищет GoogleService-Info.plist
+          echo "--- Ссылки на GoogleService-Info.plist в проекте ---"
+          grep -n "GoogleService-Info.plist" ios/PocketPal.xcodeproj/project.pbxproj || echo "нет ссылок"
+
+          # 3. Заглушка Firebase (только если настоящего файла нет)
+          for p in ios/GoogleService-Info.plist ios/PocketPal/GoogleService-Info.plist; do
+            [ -f "$p" ] && continue
+            mkdir -p "$(dirname "$p")"
+            cat > "$p" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>API_KEY</key><string>AIzaSyA00000000000000000000000000000000</string>
+            <key>GCM_SENDER_ID</key><string>000000000000</string>
+            <key>BUNDLE_ID</key><string>com.pocketpalai</string>
+            <key>PROJECT_ID</key><string>local-build</string>
+            <key>STORAGE_BUCKET</key><string>local-build.appspot.com</string>
+            <key>GOOGLE_APP_ID</key><string>1:000000000000:ios:0000000000000000</string>
+            <key>IS_ANALYTICS_ENABLED</key><false/>
+            <key>IS_GCM_ENABLED</key><false/>
+            <key>IS_SIGNIN_ENABLED</key><false/>
+          </dict></plist>
+          EOF
+            sed -i '' 's/^          //' "$p"
+            echo "Создана заглушка: $p"
+          done
+
       - name: Install Pods
         run: cd ios && bundle exec pod install
 
