@@ -1,0 +1,91 @@
+name: Build iOS (unsigned IPA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ветка, тег или коммит"
+        default: "main"
+      scheme:
+        description: "Схема Xcode (пусто = автоопределение)"
+        default: ""
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Check Xcode >= 26.6 and get Metal Toolchain
+        run: |
+          xcodebuild -version
+          ver=$(xcodebuild -version | head -1 | awk '{print $2}')
+          if [ "$(printf '%s\n' 26.6 "$ver" | sort -V | head -1)" != "26.6" ]; then
+            echo "::error::Нужен Xcode 26.6+, на раннере $ver"; exit 1
+          fi
+          xcodebuild -downloadComponent MetalToolchain
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Install JS deps
+        run: |
+          corepack enable
+          [ -f .env ] || cp .env.example .env
+          yarn install --frozen-lockfile
+
+      - name: Install Pods
+        run: cd ios && bundle exec pod install
+
+      - name: Detect workspace and scheme
+        run: |
+          WS=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME="${{ inputs.scheme }}"
+          [ -z "$SCHEME" ] && SCHEME=$(basename "$WS" .xcworkspace)
+          echo "WS=$WS" >> "$GITHUB_ENV"
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          xcodebuild -list -workspace "$WS"
+
+      - name: Build (no signing)
+        run: |
+          set -o pipefail
+          xcodebuild -workspace "$WS" -scheme "$SCHEME" \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee xcodebuild.log
+
+      - name: Package IPA
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          mkdir -p out/Payload && cp -R "$APP" out/Payload/
+          (cd out && zip -qry ../PocketPal-unsigned.ipa Payload)
+          shasum -a 256 PocketPal-unsigned.ipa | tee PocketPal-unsigned.ipa.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PocketPal-unsigned
+          path: |
+            PocketPal-unsigned.ipa
+            PocketPal-unsigned.ipa.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: xcodebuild.log
